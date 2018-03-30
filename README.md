@@ -1,6 +1,6 @@
 # Bela.pd
 
-Utilities for working with [PureData](http://puredata.info) on the [Bela Platform](http://bela.io)
+Library for working with [PureData](http://puredata.info) on the [Bela Platform](http://bela.io)
 
 ## Objects
 - `bela.comms`: send and receive data to and from Bela
@@ -9,12 +9,18 @@ Utilities for working with [PureData](http://puredata.info) on the [Bela Platfor
 - `bela.name`: name an item of data to be sent to Bela
 - `bela.scope`: easy access to the Bela oscilloscope
 
+## Examples
+- **sliders** ([video](https://youtu.be/n1fM8_vGO88)). Send and receive data to and from Bela, with the same patch running on Bela and local machine.
+
+![sliders](https://i.imgur.com/09SBCyW.png)
+
 ## Installation
 
 - Download or clone this repository
-- Copy `pd-externals` to the folder `/root/Bela/projects/pd-externals` (create the folder first if needed - see [this GitHub issue](https://github.com/BelaPlatform/Bela/issues/384) for details)
-- Copy to your local machine's PureData externals directory and add to PureData's search path
-- Try an example patch
+- Copy the custom libpd render to Bela: `scp bela.pd/core/default_libpd_render.cpp root@192.168.7.2:/root/Bela/core/default_libpd_render.cpp`
+- Copy the pd-externals to Bela: `scp bela.pd/pd-externals/* root@192.168.7.2:/root/Bela/projects/pd-externals` (create the folder on Bela first if needed - see [this GitHub issue](https://github.com/BelaPlatform/Bela/issues/384) for details)
+- Add `bela.pd/pd-externals` to PureData's search path
+- Run the example patch
 
 ## Todo/ideas
 
@@ -22,3 +28,4 @@ Utilities for working with [PureData](http://puredata.info) on the [Bela Platfor
 - Saving and managing state and parameters
 - A data logger on Bela
 - Integration with other libraries like `ml.lib`
+- Add more examples
