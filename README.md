@@ -15,3 +15,10 @@ Utilities for working with [PureData](http://puredata.info) on the [Bela Platfor
 - Copy `pd-externals` to the folder `/root/Bela/projects/pd-externals` (create the folder first if needed - see [this GitHub issue](https://github.com/BelaPlatform/Bela/issues/384) for details)
 - Copy to your local machine's PureData externals directory and add to PureData's search path
 - Try an example patch
+
+## Todo/ideas
+
+- Make `comms` work with non-static IP
+- Saving and managing state and parameters
+- A data logger on Bela
+- Integration with other libraries like `ml.lib`
