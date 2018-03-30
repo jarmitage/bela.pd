@@ -17,7 +17,7 @@ Library for working with [PureData](http://puredata.info) on the [Bela Platform]
 ## Installation
 
 - Download or clone this repository
-- Copy the custom libpd render to Bela:
+- Copy the custom libpd render to Bela ([in future](https://github.com/BelaPlatform/Bela/issues/390) use `Bela/examples/08-PureData/customRender`):
 
 ```
 scp bela.pd/core/default_libpd_render.cpp root@192.168.7.2:/root/Bela/core/default_libpd_render.cpp
