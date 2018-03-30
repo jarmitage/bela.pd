@@ -20,17 +20,17 @@ Library for working with [PureData](http://puredata.info) on the [Bela Platform]
 - Copy the custom libpd render to Bela ([in future](https://github.com/BelaPlatform/Bela/issues/390) use `Bela/examples/08-PureData/customRender`):
 
 ```
-scp bela.pd/core/default_libpd_render.cpp root@192.168.7.2:/root/Bela/core/default_libpd_render.cpp
+scp path/to/bela.pd/core/default_libpd_render.cpp root@192.168.7.2:/root/Bela/core/default_libpd_render.cpp
 ```
 
 - Copy the pd-externals to Bela (create the folder on Bela first if needed - see [this GitHub issue](https://github.com/BelaPlatform/Bela/issues/384) for details):
 
 ```
-scp bela.pd/pd-externals/* root@192.168.7.2:/root/Bela/projects/pd-externals
+scp /path/to/bela.pd/projects/pd-externals/* root@192.168.7.2:/root/Bela/projects/pd-externals
 ```
 
-- Add `bela.pd/pd-externals` to PureData's search path
-- Run the example patch
+- Add `/path/to/bela.pd/pd-externals` to PureData's search path on your local machine
+- Create a Pd project on Bela using e.g. the `/path/to/bela.pd/projects/sliders` example, and run the same patch locally 
 
 ## Todo/ideas
 
