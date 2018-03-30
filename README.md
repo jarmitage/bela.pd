@@ -17,8 +17,18 @@ Library for working with [PureData](http://puredata.info) on the [Bela Platform]
 ## Installation
 
 - Download or clone this repository
-- Copy the custom libpd render to Bela: `scp bela.pd/core/default_libpd_render.cpp root@192.168.7.2:/root/Bela/core/default_libpd_render.cpp`
-- Copy the pd-externals to Bela: `scp bela.pd/pd-externals/* root@192.168.7.2:/root/Bela/projects/pd-externals` (create the folder on Bela first if needed - see [this GitHub issue](https://github.com/BelaPlatform/Bela/issues/384) for details)
+- Copy the custom libpd render to Bela:
+
+```
+scp bela.pd/core/default_libpd_render.cpp root@192.168.7.2:/root/Bela/core/default_libpd_render.cpp
+```
+
+- Copy the pd-externals to Bela (create the folder on Bela first if needed - see [this GitHub issue](https://github.com/BelaPlatform/Bela/issues/384) for details):
+
+```
+scp bela.pd/pd-externals/* root@192.168.7.2:/root/Bela/projects/pd-externals
+```
+
 - Add `bela.pd/pd-externals` to PureData's search path
 - Run the example patch
 
