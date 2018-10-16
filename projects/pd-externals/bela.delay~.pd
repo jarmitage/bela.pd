@@ -1,0 +1,14 @@
+#N canvas 1990 1540 699 483 10;
+#X obj 57 63 inlet~;
+#X obj 195 262 outlet~;
+#X obj 195 63 inlet~;
+#X obj 308 62 inlet~;
+#X obj 57 177 delwrite~ \$0-dw 100;
+#X obj 195 179 vd~ \$0-dw;
+#X text 307 39 feedback;
+#X text 55 35 sensor input;
+#X text 195 39 delay length;
+#X connect 0 0 4 0;
+#X connect 2 0 5 0;
+#X connect 3 0 4 0;
+#X connect 5 0 1 0;

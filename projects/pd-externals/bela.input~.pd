@@ -1,0 +1,16 @@
+#N canvas 495 22 450 300 10;
+#X obj 79 71 hip~ 50;
+#X obj 79 115 *~ 7.5;
+#X obj 79 43 inlet~;
+#X obj 79 137 outlet~;
+#X obj 126 43 inlet;
+#X obj 166 43 inlet;
+#X obj 206 43 inlet;
+#X obj 79 93 bela.gate~ 0.05;
+#X connect 0 0 7 0;
+#X connect 1 0 3 0;
+#X connect 2 0 0 0;
+#X connect 4 0 0 1;
+#X connect 5 0 7 1;
+#X connect 6 0 1 1;
+#X connect 7 0 1 0;
