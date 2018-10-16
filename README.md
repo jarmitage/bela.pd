@@ -40,3 +40,4 @@ scp /path/to/bela.pd/projects/pd-externals/* root@192.168.7.2:/root/Bela/project
 - Integration with other libraries like `ml.lib`
 - Add more examples
 - Rebuild `comms` using `send` and `receive`? Or, have `comms` sit in the background and a `bela.s` and `bela.r` per item of data.
+- Add [CV-MIDI converters](https://github.com/BelaPlatform/Bela/tree/dev-modular/examples/08-PureData/midi-cv-midi)?
