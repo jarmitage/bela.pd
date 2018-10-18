@@ -298,7 +298,7 @@ void fdLoop(void* arg){
 	// printf("Bytes available: %d\n", rb_available_to_read(pd_that->pd_inter->i_rbsend));
 	libpd_process_sys();
 	// printf("Bytes available: %d\n", rb_available_to_read(pd_that->pd_inter->i_rbsend));
-	sys_doio(pd_that);
+	sys_doio();
 	// printf("Bytes available: %d\n", rb_available_to_read(pd_that->pd_inter->i_rbsend));
 }
 #endif /* PD_THREADED_IO */
