@@ -1,0 +1,13 @@
+#N canvas 817 405 450 300 10;
+#X obj 33 125 outlet~;
+#X obj 33 24 inlet~;
+#X obj 33 44 phasor~;
+#X obj 33 85 -~ 0.5;
+#X obj 33 105 *~ 2;
+#X obj 33 65 expr~ $v1 > 0.5;
+#X text 94 25 square wave between -1 and 1 (like [osc~]);
+#X connect 1 0 2 0;
+#X connect 2 0 5 0;
+#X connect 3 0 4 0;
+#X connect 4 0 0 0;
+#X connect 5 0 3 0;
