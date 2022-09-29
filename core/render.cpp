@@ -1,23 +1,167 @@
+#include <Bela.h>
 /*
- * Default render file for Bela projects running Pd patches
- * using libpd.
+ ____  _____ _        _    
+| __ )| ____| |      / \   
+|  _ \|  _| | |     / _ \  
+| |_) | |___| |___ / ___ \ 
+|____/|_____|_____/_/   \_\
+
+The platform for ultra-low latency audio and sensor processing
+
+http://bela.io
+
+A project of the Augmented Instruments Laboratory within the
+Centre for Digital Music at Queen Mary University of London.
+http://www.eecs.qmul.ac.uk/~andrewm
+
+(c) 2016 Augmented Instruments Laboratory: Andrew McPherson,
+	Astrid Bin, Liam Donovan, Christian Heinrichs, Robert Jack,
+	Giulio Moro, Laurel Pardue, Victor Zappi. All rights reserved.
+
+The Bela software is distributed under the GNU Lesser General Public License
+(LGPL 3.0), available here: https://www.gnu.org/licenses/lgpl-3.0.txt
+*/
+
+/*
+ *	USING A CUSTOM RENDER.CPP FILE FOR PUREDATA PATCHES - LIBPD
+ *  ===========================================================
+ *  ||                                                       ||
+ *  || OPEN THE ENCLOSED _main.pd PATCH FOR MORE INFORMATION ||
+ *  || ----------------------------------------------------- ||
+ *  ===========================================================
  */
 #include <Bela.h>
+
+#define BELA_LIBPD_GUI
+
 #include <DigitalChannelManager.h>
-#include <cmath>
 #include <stdio.h>
 #define PD_THREADED_IO
 #include <libpd/z_libpd.h>
 extern "C" {
 #include <libpd/s_stuff.h>
 };
-#include <UdpServer.h>
-#include <Midi.h>
-#include <Scope.h>
+#include <libraries/Midi/Midi.h>
+#include <libraries/Scope/Scope.h>
 #include <string>
 #include <sstream>
-#include <algorithm>
+#include <string.h>
 
+#define ENABLE_TRILL
+
+#if (defined(BELA_LIBPD_GUI) || defined(ENABLE_TRILL))
+#include <libraries/Pipe/Pipe.h>
+template <typename T>
+int getIdxFromId(const char* id, std::vector<std::pair<std::string,T>>& db)
+{
+	for(unsigned int n = 0; n < db.size(); ++n)
+	{
+		if(0 == strcmp(id, db[n].first.c_str()))
+			return n;
+	}
+	return -1;
+}
+#endif // BELA_LIBPD_GUI || ENABLE_TRILL
+
+#ifdef ENABLE_TRILL
+#include <tuple>
+#include <libraries/Trill/Trill.h>
+AuxiliaryTask gTrillTask;
+Pipe gTrillPipe;
+
+static std::vector<std::string> gTrillAcks;
+static std::vector<std::pair<std::string,Trill*>> gTouchSensors;
+// how often to read the cap sensors inputs.
+float touchSensorSleepInterval = 0.007;
+
+void readTouchSensors(void*)
+{
+	for(unsigned int n = 0; n < gTouchSensors.size(); ++n)
+	{
+		Trill& touchSensor = *gTouchSensors[n].second;
+		int ret;
+		const Trill::Device type = touchSensor.deviceType();
+		if(Trill::NONE == type)
+			ret = 1;
+		else
+			ret = touchSensor.readI2C();
+		if(!ret)
+		{
+			gTrillPipe.writeNonRt(n);
+		}
+	}
+}
+#endif // ENABLE_TRILL
+
+#ifdef BELA_LIBPD_GUI
+#include <libraries/Gui/Gui.h>
+
+Pipe gGuiPipe;
+Gui gui;
+struct bufferDescription
+{
+	std::string name;
+	int id;
+	int size;
+};
+static std::vector<struct bufferDescription> gGuiDataBuffers;
+static std::vector<std::string> gGuiControlBuffers;
+struct guiControlMessageHeader
+{
+	uint32_t size;
+	uint32_t type;
+	uint32_t id;
+};
+
+bool guiControlDataCallback(JSONObject& root, void* arg)
+{
+	int ret = true;
+	for(unsigned int n = 0; n < gGuiControlBuffers.size(); ++n)
+	{
+		const auto& b = gGuiControlBuffers[n];
+		std::wstring key = JSON::s2ws(b);
+		if (root.end() != root.find(key))
+		{
+			JSONValue* found = root[key];
+			struct guiControlMessageHeader header;
+			header.id = n;
+			char* array;
+			if(found->IsString())
+			{
+				std::string value = JSON::ws2s(found->AsString());
+				header.type = 's';
+				header.size = value.size();
+				array = (char*)alloca(header.size);
+				memcpy(array, value.c_str(), header.size);
+			} else if(found->IsNumber())
+			{
+				float value = found->AsNumber();
+				header.type = 'f';
+				header.size = sizeof(value);
+				array = (char*)alloca(header.size);
+				memcpy(array, &value, header.size);
+			} else {
+				continue;
+			}
+			// do two separate reads: the pipe is datagram-based
+			// so it would be impossible to receive partial messages
+			// at the other end
+			gGuiPipe.writeNonRt(header);
+			gGuiPipe.writeNonRt(&array[0], header.size);
+			// we have successully parsed this message, so the
+			// default parser shouldn't when we return
+			// note: in practice there may be times when we'd want
+			// to have the default parser handle this message
+			// (e.g.: when an "event" field is also present), but
+			// for now we ignore them
+			ret = false;
+			continue;
+		}
+	}
+	return ret;
+}
+
+#endif // BELA_LIBPD_GUI
 enum { minFirstDigitalChannel = 10 };
 static unsigned int gAnalogChannelsInUse;
 static unsigned int gDigitalChannelsInUse;
@@ -43,6 +187,8 @@ float* gOutBuf;
 #define PARSE_MIDI
 static std::vector<Midi*> midi;
 std::vector<std::string> gMidiPortNames;
+int gMidiVerbose = 1;
+const int kMidiVerbosePrintLevel = 1;
 
 void dumpMidi()
 {
@@ -105,63 +251,64 @@ Midi* openMidiDevice(std::string name, bool verboseSuccess = false, bool verbose
 
 static unsigned int getPortChannel(int* channel){
 	unsigned int port = 0;
-	while(*channel > 16){
+	while(*channel >= 16){
 		*channel -= 16;
 		port += 1;
-	}
-	if(port >= midi.size()){
-		// if the port number exceeds the number of ports available, send out
-		// of the first port 
-		rt_fprintf(stderr, "Port out of range, using port 0 instead\n");
-		port = 0;
 	}
 	return port;
 }
 
 void Bela_MidiOutNoteOn(int channel, int pitch, int velocity) {
-	int port = getPortChannel(&channel);
-	rt_printf("noteout _ port: %d, channel: %d, pitch: %d, velocity %d\n", port, channel, pitch, velocity);
-	midi[port]->writeNoteOn(channel, pitch, velocity);
+	unsigned int port = getPortChannel(&channel);
+	if(gMidiVerbose >= kMidiVerbosePrintLevel)
+		rt_printf("noteout _ port: %d, channel: %d, pitch: %d, velocity %d\n", port, channel, pitch, velocity);
+	port < midi.size() && midi[port]->writeNoteOn(channel, pitch, velocity);
 }
 
 void Bela_MidiOutControlChange(int channel, int controller, int value) {
-	int port = getPortChannel(&channel);
-	rt_printf("ctlout _ port: %d, channel: %d, controller: %d, value: %d\n", port, channel, controller, value);
-	midi[port]->writeControlChange(channel, controller, value);
+	unsigned int port = getPortChannel(&channel);
+	if(gMidiVerbose >= kMidiVerbosePrintLevel)
+		rt_printf("ctlout _ port: %d, channel: %d, controller: %d, value: %d\n", port, channel, controller, value);
+	port < midi.size() && midi[port]->writeControlChange(channel, controller, value);
 }
 
 void Bela_MidiOutProgramChange(int channel, int program) {
-	int port = getPortChannel(&channel);
-	rt_printf("pgmout _ port: %d, channel: %d, program: %d\n", port, channel, program);
-	midi[port]->writeProgramChange(channel, program);
+	unsigned int port = getPortChannel(&channel);
+	if(gMidiVerbose >= kMidiVerbosePrintLevel)
+		rt_printf("pgmout _ port: %d, channel: %d, program: %d\n", port, channel, program);
+	port < midi.size() && midi[port]->writeProgramChange(channel, program);
 }
 
 void Bela_MidiOutPitchBend(int channel, int value) {
-	int port = getPortChannel(&channel);
-	rt_printf("bendout _ port: %d, channel: %d, value: %d\n", port, channel, value);
-	midi[port]->writePitchBend(channel, value);
+	unsigned int port = getPortChannel(&channel);
+	if(gMidiVerbose >= kMidiVerbosePrintLevel)
+		rt_printf("bendout _ port: %d, channel: %d, value: %d\n", port, channel, value);
+	port < midi.size() && midi[port]->writePitchBend(channel, value);
 }
 
 void Bela_MidiOutAftertouch(int channel, int pressure){
-	int port = getPortChannel(&channel);
-	rt_printf("touchout _ port: %d, channel: %d, pressure: %d\n", port, channel, pressure);
-	midi[port]->writeChannelPressure(channel, pressure);
+	unsigned int port = getPortChannel(&channel);
+	if(gMidiVerbose >= kMidiVerbosePrintLevel)
+		rt_printf("touchout _ port: %d, channel: %d, pressure: %d\n", port, channel, pressure);
+	port < midi.size() && midi[port]->writeChannelPressure(channel, pressure);
 }
 
 void Bela_MidiOutPolyAftertouch(int channel, int pitch, int pressure){
-	int port = getPortChannel(&channel);
-	rt_printf("polytouchout _ port: %d, channel: %d, pitch: %d, pressure: %d\n", port, channel, pitch, pressure);
-	midi[port]->writePolyphonicKeyPressure(channel, pitch, pressure);
+	unsigned int port = getPortChannel(&channel);
+	if(gMidiVerbose >= kMidiVerbosePrintLevel)
+		rt_printf("polytouchout _ port: %d, channel: %d, pitch: %d, pressure: %d\n", port, channel, pitch, pressure);
+	port < midi.size() && midi[port]->writePolyphonicKeyPressure(channel, pitch, pressure);
 }
 
 void Bela_MidiOutByte(int port, int byte){
-	rt_printf("port: %d, byte: %d\n", port, byte);
+	if(gMidiVerbose >= kMidiVerbosePrintLevel)
+		rt_printf("port: %d, byte: %d\n", port, byte);
 	if(port > (int)midi.size()){
 		// if the port is out of range, redirect to the first port.
 		rt_fprintf(stderr, "Port out of range, using port 0 instead\n");
 		port = 0;
 	}
-	midi[port]->writeOutput(byte);
+	port < (int)midi.size() && midi[port]->writeOutput(byte);
 }
 
 void Bela_printHook(const char *received){
@@ -175,14 +322,81 @@ void sendDigitalMessage(bool state, unsigned int delay, void* receiverName){
 //	rt_printf("%s: %d\n", (char*)receiverName, state);
 }
 
+#ifdef ENABLE_TRILL
+void setTrillPrintError()
+{
+	rt_fprintf(stderr, "bela_setTrill format is wrong. Should be:\n"
+		"[mode <sensor_id> <prescaler_value>(\n"
+		" or\n"
+		"[threshold <sensor_id> <threshold_value>(\n"
+		" or\n"
+		"[prescaler <sensor_id> <prescaler_value>(\n");
+}
+#endif // ENABLE_TRILL
+
+void Bela_listHook(const char *source, int argc, t_atom *argv)
+{
+#ifdef BELA_LIBPD_GUI
+	if(0 == strcmp(source, "bela_guiOut"))
+	{
+		if(!libpd_is_float(&argv[0]))
+		{
+			rt_fprintf(stderr, "Wrong format for bela_gui, the first element should be a float\n");
+			return;
+		}
+		unsigned int bufNum = libpd_get_float(&argv[1]);
+		if(libpd_is_float(&argv[1])) // if the first element is a float, we send an array of floats
+		{
+			float buf[argc - 1];
+			for(int n = 1; n < argc; ++n)
+			{
+				t_atom *a = &argv[n];
+				if(!libpd_is_float(a))
+				{
+					rt_fprintf(stderr, "Wrong format for bela_gui\n"); // this should never happen, because then the selector would've not been "float"
+					return;
+				}
+				buf[n - 1] = libpd_get_float(a);
+			}
+			gui.sendBuffer(bufNum, buf, argc - 1);
+			return;
+		} else { // otherwise we send each element of the list separately
+			for(int n = 1; n < argc; ++n)
+			{
+				t_atom *a = &argv[n];
+				if (libpd_is_float(a)) {
+					float x = libpd_get_float(a);
+					gui.sendBuffer(bufNum, x);
+				} else if (libpd_is_symbol(a)) {
+					const char *s = libpd_get_symbol(a);
+					gui.sendBuffer(bufNum, s, strlen(s)); // TODO: should it be strlen(s)+1?
+				}
+			}
+		}
+		return;
+	}
+#endif // BELA_LIBPD_GUI
+}
 void Bela_messageHook(const char *source, const char *symbol, int argc, t_atom *argv){
-	if(strcmp(source, "bela_setMidi") == 0){
+	if(strcmp(source, "bela_setMidi") == 0)
+	{
+		if(0 == strcmp("verbose", symbol))
+		{
+			if(1 != argc || !libpd_is_float(argv))
+			{
+				rt_fprintf(stderr, "Wrong format for bela_setMidi, expected: [verbose <n>(\n");
+			} else {
+				gMidiVerbose = libpd_get_float(argv);
+				rt_printf("MIDI verbose: %d\n", gMidiVerbose);
+			}
+			return;
+		}
 		int num[3] = {0, 0, 0};
 		for(int n = 0; n < argc && n < 3; ++n)
 		{
 			if(!libpd_is_float(&argv[n]))
 			{
-				fprintf(stderr, "Wrong format for Bela_setMidi, expected:[hw 1 0 0(");
+				fprintf(stderr, "Wrong format for bela_setMidi, expected:[hw 1 0 0(");
 				return;
 			}
 			num[n] = libpd_get_float(&argv[n]);
@@ -227,7 +441,7 @@ void Bela_messageHook(const char *source, const char *symbol, int argc, t_atom *
 		if(argc >= 2){
 			t_atom* a = &argv[1];
 			if(libpd_is_symbol(a)){
-				char *s = libpd_get_symbol(a);
+				const char *s = libpd_get_symbol(a);
 				if(strcmp(s, "~") == 0  || strncmp(s, "sig", 3) == 0){
 					isMessageRate = false;
 				}
@@ -236,6 +450,156 @@ void Bela_messageHook(const char *source, const char *symbol, int argc, t_atom *
 		dcm.manage(channel, direction, isMessageRate);
 		return;
 	}
+#ifdef BELA_LIBPD_GUI
+	if(0 == strcmp(source, "bela_setGui"))
+	{
+		if(0 == strcmp(symbol, "new"))
+		{
+			if(
+				argc < 2
+				|| !libpd_is_symbol(argv)
+				|| !libpd_is_symbol(argv + 1)
+			)
+			{
+				return;
+			}
+			const char* mode = libpd_get_symbol(argv);
+			const char* name = libpd_get_symbol(argv + 1);
+			if(0 == strcmp(mode, "control"))
+			{
+				gGuiControlBuffers.emplace_back(name);
+				return;
+			}
+			if(0 == strcmp(mode, "array"))
+			{
+				// because of
+				// https://github.com/libpd/libpd/issues/274
+				// (again), we cannot access the arrays right
+				// here (as it would deadlock on loadbang), so
+				// we have to defer creation of the Gui
+				// buffers until render() runs
+				gGuiDataBuffers.emplace_back(bufferDescription{.name = name, .id = -1, .size = 0});
+				return;
+			}
+			return;
+		}
+	}
+#endif // BELA_LIBPD_GUI
+#ifdef ENABLE_TRILL
+	if(0 == strcmp(source, "bela_setTrill"))
+	{
+		if(0 == strcmp(symbol, "new"))
+		{
+			bool err = false;
+
+			uint8_t address = 0xff;
+			if(argc < 3)
+				err = true;
+			else if (!libpd_is_symbol(argv) // sensor_id
+				|| !libpd_is_float(argv + 1) // bus
+				|| !libpd_is_symbol(argv + 2) // device
+			)
+				err = true;
+			if(argc >= 4)
+			{
+				if(libpd_is_float(argv + 3))
+					address = libpd_get_float(argv + 3);
+				else
+					err = true;
+			}
+			if(err)
+			{
+				rt_fprintf(stderr, "bela_setTrill wrong format. Should be:\n"
+					"[new <sensor_id> <bus> <device> <address>(\n");
+				return;
+			}
+			const char* name = libpd_get_symbol(argv);
+			unsigned int bus = libpd_get_float(argv + 1);
+			const char* deviceString = libpd_get_symbol(argv + 2);
+			Trill::Device device = Trill::getDeviceFromName(deviceString);
+
+			Trill* trill = new Trill(bus, device, address);
+			if(Trill::NONE == trill->deviceType())
+			{
+				rt_fprintf(stderr, "Unable to create Trill %s device `%s` on bus %u at ", deviceString, name, bus);
+				if(128 < address)
+					rt_fprintf(stderr, "default address. ");
+				else
+					rt_fprintf(stderr, "address: %#x (%d). ", address, address);
+				rt_fprintf(stderr, "Is the device connected?\n");
+				return;
+			}
+			gTouchSensors.emplace_back(std::string(name), trill);
+			gTrillAcks.push_back(name);
+			//an ack is sent to Pd during the next audio callback because of https://github.com/libpd/libpd/issues/274
+			return;
+		}
+		if(argc < 1 || !libpd_is_symbol(argv))
+		{
+			rt_fprintf(stderr, "bela_setTrill: wrong format. It should be\n"
+					"[<command> <sensor_id> ...(");
+			return;
+		}
+		const char* sensorId = libpd_get_symbol(argv);
+		int idx = getIdxFromId(sensorId, gTouchSensors);
+		if(idx < 0)
+		{
+			rt_fprintf(stderr, "bela_setTrill sensor_id unknown: %s\n", sensorId);
+			return;
+		}
+		if(0 == strcmp(symbol, "updateBaseline"))
+		{
+			gTouchSensors[idx].second->updateBaseline();
+			return;
+		}
+		if(0 == strcmp(symbol, "mode"))
+		{
+			if(argc < 2
+				|| !libpd_is_symbol(argv)
+				|| !libpd_is_symbol(argv + 1)
+			) {
+				setTrillPrintError();
+				return;
+			}
+			const char* modeString = libpd_get_symbol(argv + 1);
+			Trill::Mode mode = Trill::getModeFromName(modeString);
+			gTouchSensors[idx].second->setMode(mode);
+		}
+		if(
+			0 == strcmp(symbol, "threshold")
+			|| 0 == strcmp(symbol, "prescaler")
+		)
+		{
+			if(
+				argc < 2
+				|| !libpd_is_symbol(argv)
+				|| !libpd_is_float(argv + 1)
+			  ) {
+				setTrillPrintError();
+				return;
+			}
+			float value = libpd_get_float(argv + 1);
+			if(0 == strcmp(symbol, "threshold"))
+			{
+				gTouchSensors[idx].second->setNoiseThreshold(value);
+			}
+			if(0 == strcmp(symbol, "prescaler"))
+			{
+				if(Trill::prescalerMax < value || 0 > value)
+				{
+					if(0 == value)
+						value = 0;
+					if(Trill::prescalerMax < value)
+						value = Trill::prescalerMax;
+					rt_printf("bela_setTrill prescaler value out of range, clipping to %u\n", value);
+				}
+				gTouchSensors[idx].second->setPrescaler(value);
+			}
+			return;
+		}
+		return;
+	}
+#endif // ENABLE_TRILL
 }
 
 void Bela_floatHook(const char *source, float value){
@@ -288,18 +652,12 @@ static bool pdMultiplexerActive = false;
 
 #ifdef PD_THREADED_IO
 void fdLoop(void* arg){
-	while(!gShouldStop){
-		sys_doio();
-		usleep(3000);
+	while(!Bela_stopRequested()){
+		if(!sys_doio(pd_this))
+			usleep(3000);
 	}
-
-	// printf("Bytes available: %d\n", rb_available_to_read(pd_that->pd_inter->i_rbsend));
+	// bela.pd
 	libpd_float("didBelaStop",1);
-	// printf("Bytes available: %d\n", rb_available_to_read(pd_that->pd_inter->i_rbsend));
-	libpd_process_sys();
-	// printf("Bytes available: %d\n", rb_available_to_read(pd_that->pd_inter->i_rbsend));
-	sys_doio();
-	// printf("Bytes available: %d\n", rb_available_to_read(pd_that->pd_inter->i_rbsend));
 }
 #endif /* PD_THREADED_IO */
 
@@ -310,6 +668,11 @@ bool gDigitalEnabled = 0;
 
 bool setup(BelaContext *context, void *userData)
 {
+#ifdef BELA_LIBPD_GUI
+	gui.setup(context->projectName);
+	gui.setControlDataCallback(guiControlDataCallback, nullptr);
+	gGuiPipe.setup("guiControlPipe", 16384);
+#endif // BELA_LIBPD_GUI
 	// Check Pd's version
 	int major, minor, bugfix;
 	sys_getversion(&major, &minor, &bugfix);
@@ -368,7 +731,7 @@ bool setup(BelaContext *context, void *userData)
 	gFirstScopeChannel = gFirstDigitalChannel + gDigitalChannelsInUse;
 
 	gChannelsInUse = gFirstScopeChannel + gScopeChannelsInUse;
-	
+
 	// Create receiverNames for digital channels
 	generateDigitalNames(gDigitalChannelsInUse, gLibpdDigitalChannelOffset, gReceiverInputNames, gReceiverOutputNames);
 	
@@ -407,6 +770,7 @@ bool setup(BelaContext *context, void *userData)
 	// set hooks before calling libpd_init
 	libpd_set_printhook(Bela_printHook);
 	libpd_set_floathook(Bela_floatHook);
+	libpd_set_listhook(Bela_listHook);
 	libpd_set_messagehook(Bela_messageHook);
 	libpd_set_noteonhook(Bela_MidiOutNoteOn);
 	libpd_set_controlchangehook(Bela_MidiOutControlChange);
@@ -437,6 +801,13 @@ bool setup(BelaContext *context, void *userData)
 		libpd_bind(gReceiverOutputNames[i].c_str());
 	libpd_bind("bela_setDigital");
 	libpd_bind("bela_setMidi");
+#ifdef BELA_LIBPD_GUI
+	libpd_bind("bela_guiOut");
+	libpd_bind("bela_setGui");
+#endif // BELA_LIBPD_GUI
+#ifdef ENABLE_TRILL
+	libpd_bind("bela_setTrill");
+#endif // ENABLE_TRILL
 
 	// open patch:
 	gPatch = libpd_openfile(file, folder);
@@ -468,24 +839,171 @@ bool setup(BelaContext *context, void *userData)
 	Bela_scheduleAuxiliaryTask(fdTask);
 #endif /* PD_THREADED_IO */
 
-	// Tell Bela it is Bela
-	// TODO: Make this send Bela's IP address if it's not 192.168.7.2
+	// bela.pd
 	libpd_float("isThisBela",1);
 
 	dcm.setVerbose(false);
+#ifdef ENABLE_TRILL
+	gTrillTask = Bela_createAuxiliaryTask(readTouchSensors, 51, "touchSensorRead", NULL);
+	gTrillPipe.setup("trillPipe", 1024);
+#endif // ENABLE_TRILL
 	return true;
 }
 
 void render(BelaContext *context, void *userData)
 {
-	int num;
+#ifdef BELA_LIBPD_GUI
+	while(gGuiControlBuffers.size()) // this won't change within the loop, but it's good not to have to use a separate flag
+	{
+		static struct guiControlMessageHeader header;
+		static bool waitingForHeader = true;
+		if(waitingForHeader)
+		{
+			int ret = gGuiPipe.readRt(header);
+			if(1 != ret)
+				break;
+			else
+				waitingForHeader = false;
+		}
+		if(!waitingForHeader)
+		{
+			char payload[header.size];
+			int ret = gGuiPipe.readRt(&payload[0], header.size);
+			if(int(header.size) != ret)
+			{
+				break;
+			}
+			const char* name = gGuiControlBuffers[header.id].c_str();
+			if('f' == header.type)
+			{
+				if(header.size != sizeof(float))
+				{
+					rt_fprintf(stderr, "Unexpected message length for float: %u\n", header.size);
+					continue;
+				}
+				float value = ((float*)payload)[0];
+				libpd_start_message(1);
+				libpd_add_float(value);
+				libpd_finish_message("bela_guiControl", name);
+			}
+			if('s' == header.type)
+			{
+				libpd_symbol(name, payload);
+			}
+			waitingForHeader = true;
+		}
+	}
+	for(auto& b : gGuiDataBuffers)
+	{
+		int id = b.id;
+		int size = b.size;
+		const char* name = b.name.c_str();
+		if(id < 0)
+		{
+			// initialize
+			size = libpd_arraysize(name);
+			if(size <= 0)
+			{
+				continue;
+			} else {
+				// this is thread-unsafe: what happens if this causes reallocation while the Gui thread is writing to a buffer?
+				id = gui.setBuffer('f', size);
+				b.id = id;
+				b.size = size;
+				DataBuffer& dataBuffer = gui.getDataBuffer(id);
+				// initialize gui buffer with the initial content of the array
+				libpd_read_array(dataBuffer.getAsFloat(), b.name.c_str(), 0, size);
+			}
+		}
+		DataBuffer& dataBuffer = gui.getDataBuffer(b.id);
+		libpd_write_array(b.name.c_str(), 0, dataBuffer.getAsFloat(), dataBuffer.getNumElements());
+	}
+#endif // BELA_LIBPD_GUI
+#ifdef ENABLE_TRILL
+	for(auto& name : gTrillAcks)
+	{
+		unsigned int idx = getIdxFromId(name.c_str(), gTouchSensors);
+		libpd_start_message(3);
+		libpd_add_symbol(Trill::getNameFromDevice(gTouchSensors[idx].second->deviceType()).c_str());
+		libpd_add_float(gTouchSensors[idx].second->getAddress());
+		libpd_add_symbol(Trill::getNameFromMode(gTouchSensors[idx].second->getMode()).c_str());
+		libpd_finish_message("bela_trillCreated", name.c_str());
+	}
+	gTrillAcks.resize(0);
+	bool doTrill = false;
+	for(auto& t : gTouchSensors)
+	{
+		if(Trill::NONE != t.second->deviceType())
+		{
+			doTrill = true;
+			break;
+		}
+	}
+	if(doTrill)
+	{
+		int idx;
+		while(gTrillPipe.readRt(idx) > 0)
+		{
+			Trill& touchSensor = *gTouchSensors[idx].second;
+			const char* sensorId = gTouchSensors[idx].first.c_str();
+			if(Trill::Device::NONE == touchSensor.deviceType())
+				continue;
+
+			const Trill::Mode mode = touchSensor.getMode();
+			if(Trill::DIFF == mode || Trill::RAW == mode || Trill::BASELINE == mode)
+			{
+				libpd_start_message(touchSensor.getNumChannels());
+				for(unsigned int n = 0; n < touchSensor.getNumChannels(); ++n)
+				{
+					libpd_add_float(touchSensor.rawData[n]);
+				}
+			} else if(Trill::CENTROID == mode)
+			{
+				if(touchSensor.is1D()) {
+					libpd_start_message(2 * touchSensor.getNumTouches() + 1);
+					libpd_add_float(touchSensor.getNumTouches());
+					for(unsigned int i = 0; i < touchSensor.getNumTouches(); i++) {
+						libpd_add_float(touchSensor.touchLocation(i));
+						libpd_add_float(touchSensor.touchSize(i));
+					}
+				} else if (touchSensor.is2D()) {
+					int numTouches = touchSensor.compoundTouchSize() > 0;
+					libpd_start_message(2 * numTouches + 1);
+					libpd_add_float(numTouches > 0);
+					if(numTouches)
+					{
+						libpd_add_float(touchSensor.compoundTouchHorizontalLocation());
+						libpd_add_float(touchSensor.compoundTouchLocation());
+						libpd_add_float(touchSensor.compoundTouchSize());
+					}
+				}
+			}
+			else
+				continue;
+			libpd_finish_message("bela_trill", sensorId);
+		}
+
+		static unsigned int count = 0;
+		unsigned int readIntervalSamples = touchSensorSleepInterval * context->audioSampleRate;
+		count += context->audioFrames;
+		if(count > readIntervalSamples)
+		{
+			Bela_scheduleAuxiliaryTask(gTrillTask);
+			count -= readIntervalSamples;
+		}
+	}
+#endif // ENABLE_TRILL
 #ifdef PARSE_MIDI
+	int num;
 	for(unsigned int port = 0; port < midi.size(); ++port){
 		while((num = midi[port]->getParser()->numAvailableMessages()) > 0){
 			static MidiChannelMessage message;
 			message = midi[port]->getParser()->getNextChannelMessage();
-			rt_printf("On port %d (%s): ", port, gMidiPortNames[port].c_str());
-			message.prettyPrint(); // use this to print beautified message (channel, data bytes)
+			if(gMidiVerbose >= kMidiVerbosePrintLevel)
+			{
+				rt_printf("On port %d (%s): ", port, gMidiPortNames[port].c_str());
+				message.prettyPrint(); // use this to print beautified message (channel, data bytes)
+			}
 			switch(message.getType()){
 				case kmmNoteOn:
 				{
@@ -574,7 +1092,7 @@ void render(BelaContext *context, void *userData)
 	for(unsigned int tick = 0; tick < numberOfPdBlocksToProcess; ++tick)
 	{
 		//audio input
-		for(int n = 0; n < context->audioInChannels; ++n)
+		for(unsigned int n = 0; n < context->audioInChannels; ++n)
 		{
 			memcpy(
 				gInBuf + n * gLibpdBlockSize,
@@ -584,7 +1102,7 @@ void render(BelaContext *context, void *userData)
 		}
 
 		// analog input
-		for(int n = 0; n < context->analogInChannels; ++n)
+		for(unsigned int n = 0; n < context->analogInChannels; ++n)
 		{
 			memcpy(
 				gInBuf + gLibpdBlockSize * gFirstAnalogInChannel + n * gLibpdBlockSize,
@@ -655,9 +1173,9 @@ void render(BelaContext *context, void *userData)
 			}
 			scope.log(gScopeOut[0], gScopeOut[1], gScopeOut[2], gScopeOut[3]);
 		}
-
+		
 		// audio output
-		for(int n = 0; n < context->audioOutChannels; ++n)
+		for(unsigned int n = 0; n < context->audioOutChannels; ++n)
 		{
 			memcpy(
 				context->audioOut + tick * gLibpdBlockSize + n * context->audioFrames, 
@@ -667,7 +1185,7 @@ void render(BelaContext *context, void *userData)
 		}
 
 		//analog output
-		for(int n = 0; n < context->analogOutChannels; ++n)
+		for(unsigned int n = 0; n < context->analogOutChannels; ++n)
 		{
 			memcpy(
 				context->analogOut + tick * gLibpdBlockSize + n * context->analogFrames, 
@@ -684,6 +1202,13 @@ void cleanup(BelaContext *context, void *userData)
 	{
 		delete a;
 	}
+#ifdef ENABLE_TRILL
+	for(auto t : gTouchSensors)
+	{
+		// t.first is a std::string, so the memory will be deallocated automatically
+		delete t.second;
+	}
+#endif // ENABLE_TRILL
 	libpd_closefile(gPatch);
 	delete [] gScopeOut;
 }
