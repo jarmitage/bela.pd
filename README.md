@@ -1,6 +1,6 @@
 # Bela.pd
 
-Library for working with [PureData](http://puredata.info) on the [Bela Platform](http://bela.io)
+Library for working with [PureData](http://puredata.info) on the [Bela Platform](http://bela.io), enabling bidirectional communication between the same Pd patch running on Bela and a local machine. Half-live coding?
 
 ## Objects
 - `bela.comms`: send and receive data to and from Bela
@@ -9,7 +9,7 @@ Library for working with [PureData](http://puredata.info) on the [Bela Platform]
 - `bela.name`: name an item of data to be sent to Bela
 - `bela.scope`: easy access to the Bela oscilloscope
 
-## Examples
+## Example
 - **sliders** ([video](https://youtu.be/n1fM8_vGO88)). Send and receive data to and from Bela, with the same patch running on Bela and local machine.
 
 ![sliders](https://i.imgur.com/09SBCyW.png)
@@ -17,20 +17,18 @@ Library for working with [PureData](http://puredata.info) on the [Bela Platform]
 ## Installation
 
 - Download or clone this repository
-- Copy the custom libpd render to Bela ([in future](https://github.com/BelaPlatform/Bela/issues/390) use `Bela/examples/08-PureData/customRender`):
+- Create a Bela Pure Data project called `pd-externals`, see [this Wiki section for reference](https://github.com/BelaPlatform/Bela/wiki/Running-Puredata-patches-on-Bela#using-an-externals-folder)
+- Copy the externals in `./bela.pd/pd-externals` to `pd-externals` to Bela, either by drag and drop via the IDE, or via the command-line:
 
 ```
-scp path/to/bela.pd/core/default_libpd_render.cpp root@192.168.7.2:/root/Bela/core/default_libpd_render.cpp
+scp /path/to/bela.pd/pd-externals/* root@bela.local:/root/Bela/projects/pd-externals
 ```
+- Add `/path/to/bela.pd/pd-externals` to Pure Data's search path on your local machine
 
-- Copy the pd-externals to Bela (create the folder on Bela first if needed - see [this GitHub issue](https://github.com/BelaPlatform/Bela/issues/384) for details):
-
-```
-scp /path/to/bela.pd/projects/pd-externals/* root@192.168.7.2:/root/Bela/projects/pd-externals
-```
-
-- Add `/path/to/bela.pd/pd-externals` to PureData's search path on your local machine
-- Create a Pd project on Bela using e.g. the `/path/to/bela.pd/projects/sliders` example, and run the same patch locally 
+## Usage
+- Add the `./bela.pd/render.cpp` to your Pure Data projects
+- Run your project's `_main.pd` patch on Bela and your local machine at the same time
+- See the example in `./bela.pd/examples/sliders` for more
 
 ## Todo/ideas
 
@@ -41,3 +39,4 @@ scp /path/to/bela.pd/projects/pd-externals/* root@192.168.7.2:/root/Bela/project
 - Add more examples
 - Rebuild `comms` using `send` and `receive`? Or, have `comms` sit in the background and a `bela.s` and `bela.r` per item of data.
 - Add [CV-MIDI converters](https://github.com/BelaPlatform/Bela/tree/dev-modular/examples/08-PureData/midi-cv-midi)?
+- `bela.scope~` compatibility with expander capelets
